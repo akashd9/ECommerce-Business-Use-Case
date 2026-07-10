@@ -6,7 +6,12 @@
       "notebook_task": {
         "notebook_path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/medallion_ecommerce_notebook"
       },
-      "timeout_seconds": 3600
+      "timeout_seconds": 3600,
+      "webhook_notifications": {
+        "on_failure": [
+          { "id": "674a7fe1-53df-4b60-a626-9b22bb2b33f5" }
+        ]
+      }
     }
   ]
 }
