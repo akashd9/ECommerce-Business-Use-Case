@@ -1,0 +1,96 @@
+bundle:
+  name: ecommerce_lakehouse
+
+variables:
+  catalog:
+    description: Unity Catalog catalog name this environment writes to
+
+resources:
+  pipelines:
+    medallion_dlt:
+      name: medallion-ecommerce-dlt-${bundle.target}
+      catalog: ${var.catalog}
+      target: bronze
+      serverless: true
+      continuous: false
+      configuration:
+        catalog: ${var.catalog}
+      libraries:
+        - notebook:
+            path: ./notebooks/01_dlt_pipeline.py
+
+  jobs:
+    medallion_build:
+      name: medallion-ecommerce-build-${bundle.target}
+      tasks:
+        - task_key: generate_source_data
+          notebook_task:
+            notebook_path: ./notebooks/00_generate_source_data.py
+            base_parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 1800
+          webhook_notifications:
+            on_failure:
+              - id: 59000617-2955-486d-9bcd-fb181760b0ac
+        - task_key: run_dlt_pipeline
+          depends_on:
+            - task_key: generate_source_data
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.medallion_dlt.id}
+          webhook_notifications:
+            on_failure:
+              - id: 59000617-2955-486d-9bcd-fb181760b0ac
+        - task_key: build_gold_layer
+          depends_on:
+            - task_key: run_dlt_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/02_gold_layer.py
+            base_parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 1800
+          webhook_notifications:
+            on_failure:
+              - id: 59000617-2955-486d-9bcd-fb181760b0ac
+        - task_key: train_recommendation_model
+          depends_on:
+            - task_key: build_gold_layer
+          notebook_task:
+            notebook_path: ./notebooks/03_train_recommendation_model.py
+            base_parameters:
+              catalog: ${var.catalog}
+          timeout_seconds: 1800
+          webhook_notifications:
+            on_failure:
+              - id: 59000617-2955-486d-9bcd-fb181760b0ac
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      host: https://dbc-96900e6d-823b.cloud.databricks.com
+      root_path: /Workspace/Users/akash.dolas@gmail.com/.bundle/${bundle.name}/dev
+    variables:
+      catalog: ecommerce_lakehouse_dev
+    run_as:
+      user_name: akash.dolas@gmail.com
+
+  test:
+    mode: production
+    workspace:
+      host: https://dbc-96900e6d-823b.cloud.databricks.com
+      root_path: /Workspace/Users/akash.dolas@gmail.com/.bundle/${bundle.name}/test
+    variables:
+      catalog: ecommerce_lakehouse_test
+    run_as:
+      user_name: akash.dolas@gmail.com
+
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-96900e6d-823b.cloud.databricks.com
+      root_path: /Workspace/Users/akash.dolas@gmail.com/.bundle/${bundle.name}/prod
+    variables:
+      catalog: ecommerce_lakehouse_prod
+    run_as:
+      user_name: akash.dolas@gmail.com

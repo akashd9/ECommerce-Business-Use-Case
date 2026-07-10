@@ -12,7 +12,8 @@ from delta.tables import DeltaTable
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-CATALOG = "ecommerce_lakehouse"
+dbutils.widgets.text("catalog", "ecommerce_lakehouse_dev")
+CATALOG = dbutils.widgets.get("catalog")
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.gold")
 
 def read_bronze(name):

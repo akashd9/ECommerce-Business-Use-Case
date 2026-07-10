@@ -13,7 +13,9 @@ import dlt
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-CATALOG = "ecommerce_lakehouse"
+# DLT pipelines pass per-environment settings via pipeline "configuration" (Spark
+# conf), not dbutils.widgets — set via the `catalog` key in databricks.yml per target.
+CATALOG = spark.conf.get("catalog", "ecommerce_lakehouse_dev")
 VOLUME_ROOT = f"/Volumes/{CATALOG}/landing/raw_files"
 
 def bronze_name(t):

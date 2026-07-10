@@ -35,7 +35,8 @@ fake = Faker()
 random.seed(42)
 Faker.seed(42)
 
-CATALOG = "ecommerce_lakehouse"
+dbutils.widgets.text("catalog", "ecommerce_lakehouse_dev")
+CATALOG = dbutils.widgets.get("catalog")
 VOLUME_ROOT = f"/Volumes/{CATALOG}/landing/raw_files"
 
 spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG}")

@@ -84,32 +84,52 @@ Plus a registered MLflow model, `ecommerce_lakehouse.gold.product_recommender`.
 
 The trained model, params, and RMSE are logged to MLflow and registered in the Unity Catalog Model Registry as `ecommerce_lakehouse.gold.product_recommender`.
 
+## Environments (dev / test / prod)
+
+Deployed as a **Databricks Asset Bundle** (`databricks.yml`), with one target per environment — same job/pipeline definitions, different catalog and workspace path:
+
+| Environment | Git branch | Catalog | Bundle target |
+|---|---|---|---|
+| Development | `develop` | `ecommerce_lakehouse_dev` | `dev` (`mode: development`) |
+| Test | `test` | `ecommerce_lakehouse_test` | `test` (`mode: production`) |
+| Production | `main` | `ecommerce_lakehouse_prod` | `prod` (`mode: production`) |
+
+Each notebook takes the target catalog as a parameter instead of hardcoding `ecommerce_lakehouse` — `dbutils.widgets`/`base_parameters` for the three plain notebooks, and the DLT pipeline's `configuration` block (read via `spark.conf.get("catalog", ...)`) for the DLT notebook — so the exact same code deploys cleanly to all three without edits. `hotfixes` and `new-features` branch off `develop` and merge back into it before promotion.
+
 ## Repo layout
 
 ```
+databricks.yml                               Asset Bundle: dev/test/prod targets, one job + one DLT pipeline resource
 notebooks/00_generate_source_data.py         Lands synthetic files/CDC events simulating the 5 upstream sources
 notebooks/01_dlt_pipeline.py                 Delta Live Tables pipeline: Bronze -> Silver
 notebooks/02_gold_layer.py                   Dims, facts, SCD2 merges, reporting marts
 notebooks/03_train_recommendation_model.py   ALS recommendation model, MLflow tracking + UC registration
-pipelines/dlt_pipeline_spec.json             DLT pipeline definition (serverless, targets 01_dlt_pipeline.py)
-jobs/medallion_job.json                      4-task Databricks Workflow chaining all of the above, with Slack on_failure
+pipelines/dlt_pipeline_spec.json             Standalone DLT pipeline spec (manual/single-env deploy, pre-dates the bundle)
+jobs/medallion_job.json                      Standalone 4-task job spec (manual/single-env deploy, pre-dates the bundle)
 ```
 
 ## How to run
 
-1. Import all 4 notebooks under `notebooks/` into your Databricks workspace at matching paths (Workspace → Import, or `databricks workspace import`).
-2. Create the DLT pipeline:
+**Bundle deploy (recommended — handles dev/test/prod):**
+
+1. Each environment's catalog and `/Shared/<catalog>` MLflow experiment folder must exist first (Unity Catalog `CREATE CATALOG` permission required):
    ```
-   databricks pipelines create --json @pipelines/dlt_pipeline_spec.json
+   databricks catalogs create ecommerce_lakehouse_dev   # and _test, _prod
+   databricks workspace mkdirs /Shared/ecommerce_lakehouse_dev   # and _test, _prod
    ```
-   Take the returned `pipeline_id` and plug it into `jobs/medallion_job.json`'s `run_dlt_pipeline` task.
-3. Create and run the Workflow:
+2. Validate and deploy a target:
    ```
-   databricks jobs create --json @jobs/medallion_job.json
-   databricks jobs run-now <job_id>
+   databricks bundle validate --target dev
+   databricks bundle deploy --target dev
    ```
-4. The pipeline provisions the `ecommerce_lakehouse` catalog, its `bronze`/`silver`/`gold`/`landing` schemas, and the landing Volume itself — requires `CREATE CATALOG` permission in Unity Catalog (or point it at an existing catalog you already have `CREATE SCHEMA`/`CREATE VOLUME` rights on).
-5. For Slack failure alerts, create a **Slack**-type notification destination in Databricks (Settings → Notifications) — not a generic Webhook destination, which Slack silently rejects the payload from — and swap its ID into each task's `webhook_notifications.on_failure` in the job spec.
+3. Run it:
+   ```
+   databricks bundle run medallion_build --target dev
+   ```
+4. Repeat for `test` and `prod`. Each target gets its own job, DLT pipeline, and workspace path (`/Workspace/Users/<you>/.bundle/ecommerce_lakehouse/<target>`) — fully isolated from the others in the same workspace.
+5. For Slack failure alerts, create a **Slack**-type notification destination in Databricks (Settings → Notifications) — not a generic Webhook destination, which Slack silently rejects the payload from — and swap its ID into `databricks.yml`'s `webhook_notifications.on_failure` blocks.
+
+**Manual single-environment deploy** (the original approach, still works, no bundle): import the 4 notebooks, `databricks pipelines create --json @pipelines/dlt_pipeline_spec.json`, plug the returned `pipeline_id` into `jobs/medallion_job.json`, then `databricks jobs create --json @jobs/medallion_job.json`.
 
 Sized for interactive/small-scale use — low thousands of rows per table, full workflow runs in under 10 minutes on serverless compute.
 
@@ -120,3 +140,4 @@ Sized for interactive/small-scale use — low thousands of rows per table, full 
 - SCD2 merge verified: multiple historical versions form per changed customer/product, with zero customers or products ever having more than one `is_current = true` row.
 - Vendor demographics enrichment confirmed flowing through the full chain: `bronze.customer_demographics_raw` → `silver.customer_demographics` → `gold.customer_360`/`customer_ltv`, all 500 synthetic customers enriched.
 - Slack failure alerting verified live: a deliberately broken notebook was deployed, triggered a real task failure, and the alert was confirmed to land in the target Slack channel before the working notebook was restored.
+- Multi-environment deployment verified: `dev` was deployed via `databricks bundle deploy --target dev` and run end to end (~7.5 min), landing all 12 gold tables and the registered model in the isolated `ecommerce_lakehouse_dev` catalog. `test` and `prod` are deployed the same way, each fully isolated by catalog and workspace path.

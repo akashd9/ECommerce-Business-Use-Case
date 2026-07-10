@@ -15,11 +15,12 @@ from pyspark.ml.recommendation import ALS
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-CATALOG = "ecommerce_lakehouse"
+dbutils.widgets.text("catalog", "ecommerce_lakehouse_dev")
+CATALOG = dbutils.widgets.get("catalog")
 MODEL_NAME = f"{CATALOG}.gold.product_recommender"
 
 mlflow.set_registry_uri("databricks-uc")
-experiment_path = "/Shared/ecommerce_lakehouse/product_recommender"
+experiment_path = f"/Shared/{CATALOG}/product_recommender"
 mlflow.set_experiment(experiment_path)
 
 # COMMAND ----------
