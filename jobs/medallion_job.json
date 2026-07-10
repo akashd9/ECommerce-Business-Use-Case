@@ -9,7 +9,7 @@
       "timeout_seconds": 3600,
       "webhook_notifications": {
         "on_failure": [
-          { "id": "674a7fe1-53df-4b60-a626-9b22bb2b33f5" }
+          { "id": "59000617-2955-486d-9bcd-fb181760b0ac" }
         ]
       }
     }
