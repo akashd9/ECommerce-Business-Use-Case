@@ -1,0 +1,10 @@
+{
+  "name": "medallion-ecommerce-dlt",
+  "catalog": "ecommerce_lakehouse",
+  "target": "bronze",
+  "serverless": true,
+  "continuous": false,
+  "libraries": [
+    { "notebook": { "path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/01_dlt_pipeline" } }
+  ]
+}

@@ -2,15 +2,45 @@
   "name": "medallion-ecommerce-build",
   "tasks": [
     {
-      "task_key": "build_medallion_tables",
+      "task_key": "generate_source_data",
       "notebook_task": {
-        "notebook_path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/medallion_ecommerce_notebook"
+        "notebook_path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/00_generate_source_data"
       },
-      "timeout_seconds": 3600,
+      "timeout_seconds": 1800,
       "webhook_notifications": {
-        "on_failure": [
-          { "id": "59000617-2955-486d-9bcd-fb181760b0ac" }
-        ]
+        "on_failure": [{ "id": "59000617-2955-486d-9bcd-fb181760b0ac" }]
+      }
+    },
+    {
+      "task_key": "run_dlt_pipeline",
+      "depends_on": [{ "task_key": "generate_source_data" }],
+      "pipeline_task": {
+        "pipeline_id": "5e14af77-5f3f-403d-952d-4e74ca0f54fa"
+      },
+      "webhook_notifications": {
+        "on_failure": [{ "id": "59000617-2955-486d-9bcd-fb181760b0ac" }]
+      }
+    },
+    {
+      "task_key": "build_gold_layer",
+      "depends_on": [{ "task_key": "run_dlt_pipeline" }],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/02_gold_layer"
+      },
+      "timeout_seconds": 1800,
+      "webhook_notifications": {
+        "on_failure": [{ "id": "59000617-2955-486d-9bcd-fb181760b0ac" }]
+      }
+    },
+    {
+      "task_key": "train_recommendation_model",
+      "depends_on": [{ "task_key": "build_gold_layer" }],
+      "notebook_task": {
+        "notebook_path": "/Workspace/Users/akash.dolas@gmail.com/medallion_ecommerce/03_train_recommendation_model"
+      },
+      "timeout_seconds": 1800,
+      "webhook_notifications": {
+        "on_failure": [{ "id": "59000617-2955-486d-9bcd-fb181760b0ac" }]
       }
     }
   ]
