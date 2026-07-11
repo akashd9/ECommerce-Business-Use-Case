@@ -29,6 +29,9 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           timeout_seconds: 1800
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
           webhook_notifications:
             on_failure:
               - id: 59000617-2955-486d-9bcd-fb181760b0ac
@@ -37,6 +40,9 @@ resources:
             - task_key: generate_source_data
           pipeline_task:
             pipeline_id: ${resources.pipelines.medallion_dlt.id}
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
           webhook_notifications:
             on_failure:
               - id: 59000617-2955-486d-9bcd-fb181760b0ac
@@ -48,6 +54,9 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           timeout_seconds: 1800
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
           webhook_notifications:
             on_failure:
               - id: 59000617-2955-486d-9bcd-fb181760b0ac
@@ -59,6 +68,24 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
           timeout_seconds: 1800
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
+          webhook_notifications:
+            on_failure:
+              - id: 59000617-2955-486d-9bcd-fb181760b0ac
+        - task_key: monitoring_views
+          depends_on:
+            - task_key: train_recommendation_model
+          notebook_task:
+            notebook_path: ./notebooks/04_monitoring_views.py
+            base_parameters:
+              catalog: ${var.catalog}
+              pipeline_id: ${resources.pipelines.medallion_dlt.id}
+          timeout_seconds: 600
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: true
           webhook_notifications:
             on_failure:
               - id: 59000617-2955-486d-9bcd-fb181760b0ac
@@ -84,6 +111,13 @@ targets:
       catalog: ecommerce_lakehouse_test
     run_as:
       user_name: akash.dolas@gmail.com
+    resources:
+      jobs:
+        medallion_build:
+          schedule:
+            quartz_cron_expression: "0 0 5 * * ?"
+            timezone_id: "UTC"
+            pause_status: UNPAUSED
 
   prod:
     mode: production
@@ -94,3 +128,10 @@ targets:
       catalog: ecommerce_lakehouse_prod
     run_as:
       user_name: akash.dolas@gmail.com
+    resources:
+      jobs:
+        medallion_build:
+          schedule:
+            quartz_cron_expression: "0 0 6 * * ?"
+            timezone_id: "UTC"
+            pause_status: UNPAUSED

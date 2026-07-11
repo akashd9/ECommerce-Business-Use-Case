@@ -27,19 +27,20 @@ Everything else (warehouses, suppliers, shipments, reviews, cart events, promoti
 - **Auto Loader** (`cloudFiles`) — incremental file ingestion with schema inference/evolution for every file-based source (product catalog, marketing, demographics, and all the internal system exports)
 - **Delta Live Tables** — a real declarative pipeline (`notebooks/01_dlt_pipeline.py`) building Bronze → Silver with `@dlt.table`, `dlt.apply_changes` for CDC, and `@dlt.expect` / `@dlt.expect_or_drop` / `@dlt.expect_or_fail` data quality rules at three severities
 - **Unity Catalog** — governs the whole `ecommerce_lakehouse` catalog (bronze/silver/gold schemas, the landing volume, and the MLflow Model Registry entry), with lineage captured automatically across every join and merge
-- **Databricks Workflows** — a 4-task job (`jobs/medallion_job.json`) chaining data generation → DLT pipeline → gold build → model training, each step depending on the last, with Slack alerting on any task failure
+- **Databricks Workflows** — a 5-task job chaining data generation → DLT pipeline → gold build → model training → monitoring, each step depending on the last, with Slack alerting and automatic retries (`max_retries: 2`) on every task; `test`/`prod` run on a daily schedule, `dev` stays on-demand
 - **MLflow** — trains and tracks a real ALS collaborative-filtering recommendation model on `gold.fact_sales`, registered in the Unity Catalog Model Registry
 - **Photon** — automatic on all Databricks serverless compute, which is what every task in this workflow runs on (this workspace is serverless-only)
 
 ## Architecture / pipeline design
 
 ```
-00_generate_source_data  →  01_dlt_pipeline (DLT)      →  02_gold_layer        →  03_train_recommendation_model
-lands synthetic files/       Auto Loader + apply_changes    dims, facts, SCD2       ALS on fact_sales, logged +
-CDC events per source         + @dlt.expect quality rules    merges, marts           registered via MLflow
+00_generate   →  01_dlt_pipeline    →  02_gold_layer   →  03_train_recommendation   →  04_monitoring_views
+source_data      (DLT) Auto Loader     dims, facts,        model, ALS on fact_sales,     data quality + job
+                 + apply_changes        SCD2 merges,        logged + registered           run history, via
+                 + @dlt.expect rules    marts               via MLflow                    event_log() + system tables
 ```
 
-Each stage is a Databricks Workflows task depending on the one before it (`jobs/medallion_job.json`); a failure at any task posts to Slack via a `webhook_notifications.on_failure` destination.
+Each stage is a Databricks Workflows task depending on the one before it, with `max_retries: 2` and a Slack `webhook_notifications.on_failure` destination on every task. `test` and `prod` run this chain daily on a schedule; `dev` is on-demand only.
 
 Catalog / schema layout in Unity Catalog: `ecommerce_lakehouse.{bronze,silver,gold}`, plus `ecommerce_lakehouse.landing` for the staging Volume.
 
@@ -94,16 +95,28 @@ Deployed as a **Databricks Asset Bundle** (`databricks.yml`), with one target pe
 | Test | `test` | `ecommerce_lakehouse_test` | `test` (`mode: production`) |
 | Production | `main` | `ecommerce_lakehouse_prod` | `prod` (`mode: production`) |
 
-Each notebook takes the target catalog as a parameter instead of hardcoding `ecommerce_lakehouse` — `dbutils.widgets`/`base_parameters` for the three plain notebooks, and the DLT pipeline's `configuration` block (read via `spark.conf.get("catalog", ...)`) for the DLT notebook — so the exact same code deploys cleanly to all three without edits. `hotfixes` and `new-features` branch off `develop` and merge back into it before promotion.
+Each notebook takes the target catalog as a parameter instead of hardcoding `ecommerce_lakehouse` — `dbutils.widgets`/`base_parameters` for the plain notebooks, and the DLT pipeline's `configuration` block (read via `spark.conf.get("catalog", ...)`) for the DLT notebook — so the exact same code deploys cleanly to all three without edits. `hotfixes` and `new-features` branch off `develop` and merge back into it before promotion.
+
+## Scheduling, retries, and monitoring
+
+- **Schedule**: `test` runs daily at 05:00 UTC, `prod` at 06:00 UTC (`quartz_cron_expression` per target in `databricks.yml`, `pause_status: UNPAUSED`). `dev` has no schedule — DAB's `mode: development` also auto-pauses any schedule on that target regardless.
+- **Retries**: every task carries `max_retries: 2`, `min_retry_interval_millis: 60000`, `retry_on_timeout: true` — a transient failure (a flaky API call, a momentary cluster blip) gets retried automatically instead of failing the whole run.
+- **Monitoring**: `notebooks/04_monitoring_views.py` runs last on every execution and surfaces two things via `display()`:
+  - DLT expectation drop/warn counts per table, read live from the pipeline's own `event_log()` — confirms the `@dlt.expect*` rules are actually rejecting/flagging bad rows, not just declared and ignored
+  - Recent job run outcomes and durations, read from the `system.lakeflow.job_run_timeline`/`jobs` system tables — no custom run-logging needed, Databricks already records this for every job in the account
+
+  This step deliberately queries and displays rather than `CREATE VIEW`s the results: this workspace's Unity Catalog metastore is at its account-wide table quota (500 objects, shared with other pre-existing projects in the workspace), and views count against that same quota. Once there's headroom, the same two queries are ready to persist as views or wire into a BI tool.
+- **Governance**: `GRANT USE CATALOG` + `USE SCHEMA` + `SELECT` on the `gold` schema only, per catalog, to `account users` — read-only access to the business-ready layer for the whole account; `bronze`/`silver` stay restricted to the pipeline's own identity. Unity Catalog lineage is captured automatically across every join/merge with no extra setup.
 
 ## Repo layout
 
 ```
-databricks.yml                               Asset Bundle: dev/test/prod targets, one job + one DLT pipeline resource
+databricks.yml                               Asset Bundle: dev/test/prod targets, schedules, retries, one job + one DLT pipeline resource
 notebooks/00_generate_source_data.py         Lands synthetic files/CDC events simulating the 5 upstream sources
 notebooks/01_dlt_pipeline.py                 Delta Live Tables pipeline: Bronze -> Silver
 notebooks/02_gold_layer.py                   Dims, facts, SCD2 merges, reporting marts
 notebooks/03_train_recommendation_model.py   ALS recommendation model, MLflow tracking + UC registration
+notebooks/04_monitoring_views.py             Data quality + job run history, via event_log() and system tables
 pipelines/dlt_pipeline_spec.json             Standalone DLT pipeline spec (manual/single-env deploy, pre-dates the bundle)
 jobs/medallion_job.json                      Standalone 4-task job spec (manual/single-env deploy, pre-dates the bundle)
 ```
@@ -140,4 +153,6 @@ Sized for interactive/small-scale use — low thousands of rows per table, full 
 - SCD2 merge verified: multiple historical versions form per changed customer/product, with zero customers or products ever having more than one `is_current = true` row.
 - Vendor demographics enrichment confirmed flowing through the full chain: `bronze.customer_demographics_raw` → `silver.customer_demographics` → `gold.customer_360`/`customer_ltv`, all 500 synthetic customers enriched.
 - Slack failure alerting verified live: a deliberately broken notebook was deployed, triggered a real task failure, and the alert was confirmed to land in the target Slack channel before the working notebook was restored.
-- Multi-environment deployment verified: `dev` was deployed via `databricks bundle deploy --target dev` and run end to end (~7.5 min), landing all 12 gold tables and the registered model in the isolated `ecommerce_lakehouse_dev` catalog. `test` and `prod` are deployed the same way, each fully isolated by catalog and workspace path.
+- Multi-environment deployment verified: `dev`, `test`, and `prod` were each deployed via `databricks bundle deploy` and run end to end successfully (all 5 tasks, ~8-11 min each), landing the full 52-table catalog and registered model in their own isolated catalog. Note: this workspace caps DLT to 1 concurrently active pipeline update — `test`/`prod` must run sequentially, not in parallel, or the second one fails with `QUOTA_EXCEEDED_EXCEPTION`.
+- Schedule and retries verified live via `databricks jobs get`: `test`/`prod` show `pause_status: UNPAUSED` with their respective cron expressions; all 5 tasks on every job show `max_retries: 2`.
+- Monitoring verified: the `event_log()`-based data quality query and the `system.lakeflow` job-history query both run and return real data on every environment.
